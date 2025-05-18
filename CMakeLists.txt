@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(SimpleCompiler)
+project(Jam)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 14)
@@ -17,7 +17,7 @@ include_directories(${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
 
 # Add compiler executable
-add_executable(simple_compiler src/main.cpp)
+add_executable(jam src/main.cpp)
 
 # Get proper link libraries for LLVM
 llvm_map_components_to_libnames(llvm_libs
@@ -32,7 +32,7 @@ llvm_map_components_to_libnames(llvm_libs
 )
 
 # Link against LLVM libraries
-target_link_libraries(simple_compiler ${llvm_libs})
+target_link_libraries(jam ${llvm_libs})
 
 # Installation rules
-install(TARGETS simple_compiler DESTINATION bin)
+install(TARGETS jam DESTINATION bin)
