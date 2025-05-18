@@ -12,7 +12,7 @@ jobs:
     name: Build on Linux (x86_64)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Install LLVM and dependencies
         run: |
@@ -34,7 +34,7 @@ jobs:
           ./jam test.txt || echo "Execution completed with $?"
 
       - name: Archive build artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: linux-x86-artifacts
           path: |
@@ -45,7 +45,7 @@ jobs:
     name: Build on Linux (ARM64)
     runs-on: ubuntu-latest-arm64
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Install LLVM and dependencies
         run: |
@@ -67,7 +67,7 @@ jobs:
           ./jam test.txt || echo "Execution completed with $?"
 
       - name: Archive ARM build artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: linux-arm-artifacts
           path: |
@@ -81,7 +81,7 @@ jobs:
         arch: [macos-latest, macos-latest-arm64]
     runs-on: ${{ matrix.arch }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Install LLVM via Homebrew
         run: |
@@ -103,7 +103,7 @@ jobs:
           ./jam test.txt || echo "Execution completed with $?"
 
       - name: Archive macOS build artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: macos-${{ matrix.arch }}-artifacts
           path: |
