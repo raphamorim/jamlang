@@ -11,7 +11,6 @@
 #include <vector>
 #include <memory>
 #include <string>
-#include <map>
 #include <stdexcept>
 
 #include "llvm/IR/IRBuilder.h"
