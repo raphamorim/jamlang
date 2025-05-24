@@ -634,6 +634,7 @@ int main(int argc, char* argv[]) {
     // Now create the output binary
     // auto TargetTriple = llvm::sys::getDefaultHostTriple();
     std::string TargetTriple = "arm64-apple-darwin";
+    // auto targetTriple = llvm::sys::getDefaultTargetTriple();
     TheModule->setTargetTriple(TargetTriple);
 
     std::string Error;

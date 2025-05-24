@@ -11,7 +11,6 @@ Jam is a general-purpose programming language. Jam strives to give developers th
 ## Build
 
 ```bash
-chmod +x build.sh
-./build.sh
-./build/jam tests/fixtures/8-bit-unsigned-integer/sum.jam
+make build
+./jam tests/fixtures/8-bit-unsigned-integer/ops.jam
 ```
