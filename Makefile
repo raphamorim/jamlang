@@ -13,3 +13,6 @@ build-cmake:
 	cd build && cmake ..
 	cd build && cmake --build .
 	@echo "Build complete! The compiler executable is located at: $(pwd)/simple_compiler"
+
+test:
+	./jam.out tests/fixtures/8-bit-unsigned-integer/ops.jam
