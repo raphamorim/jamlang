@@ -12,6 +12,7 @@
 #include <memory>
 #include <string>
 #include <stdexcept>
+#include <map>
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
@@ -26,6 +27,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/Support/CodeGen.h"
 
 // Token types
 enum TokenType {
@@ -477,12 +479,12 @@ llvm::Value* CallExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheM
 }
 
 llvm::Value* ReturnExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
-    llvm::Value* RetVal = RetVal->codegen(Builder, TheModule, NamedValues);
-    if (!RetVal)
+    llvm::Value* ReturnValue = RetVal->codegen(Builder, TheModule, NamedValues);
+    if (!ReturnValue)
         return nullptr;
 
-    Builder.CreateRet(RetVal);
-    return RetVal;
+    Builder.CreateRet(ReturnValue);
+    return ReturnValue;
 }
 
 llvm::Value* VarDeclAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
@@ -600,7 +602,8 @@ int main(int argc, char* argv[]) {
     std::cout << output;
 
     // Now create the output binary
-    auto TargetTriple = llvm::sys::getDefaultTargetTriple();
+    // auto TargetTriple = llvm::sys::getDefaultHostTriple();
+    std::string TargetTriple = "arm64-apple-darwin";
     TheModule->setTargetTriple(TargetTriple);
 
     std::string Error;
@@ -612,7 +615,7 @@ int main(int argc, char* argv[]) {
     }
 
     llvm::TargetOptions opt;
-    auto RM = llvm::Optional<llvm::Reloc::Model>();
+    auto RM = std::optional<llvm::Reloc::Model>();
     auto TargetMachine = Target->createTargetMachine(TargetTriple, "generic", "", opt, RM);
 
     TheModule->setDataLayout(TargetMachine->createDataLayout());
@@ -627,7 +630,7 @@ int main(int argc, char* argv[]) {
     }
 
     llvm::legacy::PassManager pass;
-    if (TargetMachine->addPassesToEmitFile(pass, dest, nullptr, llvm::CGFT_ObjectFile)) {
+    if (TargetMachine->addPassesToEmitFile(pass, dest, nullptr, llvm::CodeGenFileType::ObjectFile)) {
         std::cerr << "TargetMachine can't emit a file of this type" << std::endl;
         return 1;
     }

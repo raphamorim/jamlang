@@ -5,5 +5,5 @@ LLVM_CONFIG=$(shell whereis -q llvm-config)
 
 build:
 	@echo ${LLVM_CONFIG}
-	clang++ -c ./src/main.cpp -o ./jam.o `${LLVM_CONFIG} --cxxflags`
+	clang++ -c ./src/main.cpp -o ./jam.o `${LLVM_CONFIG} --cxxflags` -fexceptions
 	clang++ -o ./jam.out ./jam.o `${LLVM_CONFIG} --ldflags --libs --libfiles --system-libs`
