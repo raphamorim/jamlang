@@ -141,9 +141,10 @@ private:
     }
 
     void identifier() {
+        int start = current - 1; // Start position of the identifier
         while (isAlphaNumeric(peek())) advance();
 
-        std::string text = source.substr(current - (current - (current - source.find_last_not_of(" \t\r\n", current - 1) - 1)), current - source.find_last_not_of(" \t\r\n", current - 1) - 1);
+        std::string text = source.substr(start, current - start);
 
         // Check for keywords
         if (text == "fn") {
@@ -162,9 +163,10 @@ private:
     }
 
     void number() {
+        int start = current - 1; // Start position of the number
         while (isDigit(peek())) advance();
 
-        std::string num = source.substr(current - 1, 1);
+        std::string num = source.substr(start, current - start);
         addToken(TOK_NUMBER, num);
     }
 
@@ -330,6 +332,19 @@ private:
     }
 
     std::unique_ptr<ExprAST> parseExpression() {
+        // Try to parse as a binary expression first
+        auto LHS = parsePrimary();
+        if (!LHS) return nullptr;
+
+        if (match(TOK_PLUS)) {
+            auto RHS = parseExpression();
+            return std::make_unique<BinaryExprAST>('+', std::move(LHS), std::move(RHS));
+        }
+
+        return LHS;
+    }
+
+    std::unique_ptr<ExprAST> parsePrimary() {
         if (match(TOK_NUMBER)) {
             return std::make_unique<NumberExprAST>(std::stoi(previous().lexeme));
         } else if (match(TOK_IDENTIFIER)) {
@@ -351,32 +366,9 @@ private:
             }
 
             return std::make_unique<VariableExprAST>(name);
-        } else if (match(TOK_RETURN)) {
-            auto expr = parseExpression();
-            consume(TOK_SEMI, "Expected ';' after return statement");
-            return std::make_unique<ReturnExprAST>(std::move(expr));
-        } else if (match(TOK_CONST) || match(TOK_VAR)) {
-            bool isConst = previous().type == TOK_CONST;
-            consume(TOK_IDENTIFIER, "Expected variable name");
-            std::string name = previous().lexeme;
-
-            consume(TOK_EQUAL, "Expected '=' after variable name");
-
-            auto init = parseExpression();
-            consume(TOK_SEMI, "Expected ';' after variable declaration");
-
-            return std::make_unique<VarDeclAST>(name, isConst, std::move(init));
         }
 
-        // Binary expressions
-        auto LHS = parseExpression();
-
-        if (match(TOK_PLUS)) {
-            auto RHS = parseExpression();
-            return std::make_unique<BinaryExprAST>('+', std::move(LHS), std::move(RHS));
-        }
-
-        return LHS;
+        return nullptr;
     }
 
     std::unique_ptr<FunctionAST> parseFunction() {
@@ -413,7 +405,28 @@ private:
 
         std::vector<std::unique_ptr<ExprAST>> body;
         while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
-            body.push_back(parseExpression());
+            if (match(TOK_RETURN)) {
+                auto expr = parseExpression();
+                consume(TOK_SEMI, "Expected ';' after return statement");
+                body.push_back(std::make_unique<ReturnExprAST>(std::move(expr)));
+            } else if (match(TOK_CONST) || match(TOK_VAR)) {
+                bool isConst = previous().type == TOK_CONST;
+                consume(TOK_IDENTIFIER, "Expected variable name");
+                std::string varName = previous().lexeme;
+
+                consume(TOK_EQUAL, "Expected '=' after variable name");
+
+                auto init = parseExpression();
+                consume(TOK_SEMI, "Expected ';' after variable declaration");
+
+                body.push_back(std::make_unique<VarDeclAST>(varName, isConst, std::move(init)));
+            } else {
+                // Other statements
+                auto expr = parseExpression();
+                if (expr) {
+                    body.push_back(std::move(expr));
+                }
+            }
         }
 
         consume(TOK_CLOSE_BRACE, "Expected '}' after function body");
@@ -543,6 +556,17 @@ llvm::Function* FunctionAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* T
         Expr->codegen(Builder, TheModule, NamedValues);
     }
 
+    // If no explicit return was generated and we have a return type, add a default return
+    if (!Builder.GetInsertBlock()->getTerminator()) {
+        if (ReturnType.empty()) {
+            Builder.CreateRetVoid();
+        } else {
+            // Return a default value (0 for integers)
+            llvm::Value* DefaultRet = llvm::ConstantInt::get(llvm::Type::getInt8Ty(TheModule->getContext()), 0, true);
+            Builder.CreateRet(DefaultRet);
+        }
+    }
+
     // Validate the generated code, checking for consistency
     llvm::verifyFunction(*F);
 
@@ -582,6 +606,12 @@ int main(int argc, char* argv[]) {
     // Tokenize the source code
     Lexer lexer(source);
     std::vector<Token> tokens = lexer.scanTokens();
+
+    // Debug: Print tokens
+    std::cout << "Tokens:" << std::endl;
+    for (const auto& token : tokens) {
+        std::cout << "Type: " << token.type << ", Lexeme: '" << token.lexeme << "', Line: " << token.line << std::endl;
+    }
 
     // Parse the tokens into an AST
     Parser parser(tokens);
