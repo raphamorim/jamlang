@@ -51,6 +51,16 @@ enum TokenType {
     TOK_VAR,
     TOK_EQUAL,
     TOK_TYPE,
+    TOK_IF,
+    TOK_ELSE,
+    TOK_EQUAL_EQUAL,
+    TOK_NOT_EQUAL,
+    TOK_LESS,
+    TOK_LESS_EQUAL,
+    TOK_GREATER,
+    TOK_GREATER_EQUAL,
+    TOK_TRUE,
+    TOK_FALSE,
 };
 
 // Token structure
@@ -157,7 +167,15 @@ private:
             addToken(TOK_CONST, text);
         } else if (text == "var") {
             addToken(TOK_VAR, text);
-        } else if (text == "u8" || text == "u16" || text == "u32" || text == "i8" || text == "i16" || text == "i32") {
+        } else if (text == "if") {
+            addToken(TOK_IF, text);
+        } else if (text == "else") {
+            addToken(TOK_ELSE, text);
+        } else if (text == "true") {
+            addToken(TOK_TRUE, text);
+        } else if (text == "false") {
+            addToken(TOK_FALSE, text);
+        } else if (text == "u8" || text == "u16" || text == "u32" || text == "i8" || text == "i16" || text == "i32" || text == "bool") {
             addToken(TOK_TYPE, text);
         } else {
             addToken(TOK_IDENTIFIER, text);
@@ -199,7 +217,38 @@ public:
                 case ';': addToken(TOK_SEMI, ";"); break;
                 case ':': addToken(TOK_COLON, ":"); break;
                 case '+': addToken(TOK_PLUS, "+"); break;
-                case '=': addToken(TOK_EQUAL, "="); break;
+                
+                case '=':
+                    if (match('=')) {
+                        addToken(TOK_EQUAL_EQUAL, "==");
+                    } else {
+                        addToken(TOK_EQUAL, "=");
+                    }
+                    break;
+                
+                case '!':
+                    if (match('=')) {
+                        addToken(TOK_NOT_EQUAL, "!=");
+                    } else {
+                        std::cerr << "Unexpected character at line " << line << ": " << c << std::endl;
+                    }
+                    break;
+                
+                case '<':
+                    if (match('=')) {
+                        addToken(TOK_LESS_EQUAL, "<=");
+                    } else {
+                        addToken(TOK_LESS, "<");
+                    }
+                    break;
+                
+                case '>':
+                    if (match('=')) {
+                        addToken(TOK_GREATER_EQUAL, ">=");
+                    } else {
+                        addToken(TOK_GREATER, ">");
+                    }
+                    break;
 
                 case '-':
                     if (match('>')) {
@@ -243,6 +292,13 @@ public:
     llvm::Value* codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) override;
 };
 
+class BooleanExprAST : public ExprAST {
+    bool Val;
+public:
+    BooleanExprAST(bool Val) : Val(Val) {}
+    llvm::Value* codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) override;
+};
+
 class VariableExprAST : public ExprAST {
     std::string Name;
 public:
@@ -251,11 +307,11 @@ public:
 };
 
 class BinaryExprAST : public ExprAST {
-    char Op;
+    std::string Op;
     std::unique_ptr<ExprAST> LHS, RHS;
 public:
-    BinaryExprAST(char Op, std::unique_ptr<ExprAST> LHS, std::unique_ptr<ExprAST> RHS)
-        : Op(Op), LHS(std::move(LHS)), RHS(std::move(RHS)) {}
+    BinaryExprAST(std::string Op, std::unique_ptr<ExprAST> LHS, std::unique_ptr<ExprAST> RHS)
+        : Op(std::move(Op)), LHS(std::move(LHS)), RHS(std::move(RHS)) {}
     llvm::Value* codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) override;
 };
 
@@ -283,6 +339,18 @@ class VarDeclAST : public ExprAST {
 public:
     VarDeclAST(std::string Name, std::string Type, bool IsConst, std::unique_ptr<ExprAST> Init)
         : Name(std::move(Name)), Type(std::move(Type)), IsConst(IsConst), Init(std::move(Init)) {}
+    llvm::Value* codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) override;
+};
+
+class IfExprAST : public ExprAST {
+    std::unique_ptr<ExprAST> Condition;
+    std::vector<std::unique_ptr<ExprAST>> ThenBody;
+    std::vector<std::unique_ptr<ExprAST>> ElseBody;
+public:
+    IfExprAST(std::unique_ptr<ExprAST> Condition, 
+              std::vector<std::unique_ptr<ExprAST>> ThenBody,
+              std::vector<std::unique_ptr<ExprAST>> ElseBody)
+        : Condition(std::move(Condition)), ThenBody(std::move(ThenBody)), ElseBody(std::move(ElseBody)) {}
     llvm::Value* codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) override;
 };
 
@@ -348,6 +416,14 @@ private:
     std::unique_ptr<ExprAST> parsePrimary() {
         if (match(TOK_NUMBER)) {
             return std::make_unique<NumberExprAST>(std::stoll(previous().lexeme));
+        } else if (match(TOK_TRUE)) {
+            return std::make_unique<BooleanExprAST>(true);
+        } else if (match(TOK_FALSE)) {
+            return std::make_unique<BooleanExprAST>(false);
+        } else if (match(TOK_OPEN_PAREN)) {
+            auto expr = parseExpression();
+            consume(TOK_CLOSE_PAREN, "Expected ')' after expression");
+            return expr;
         } else if (match(TOK_IDENTIFIER)) {
             std::string name = previous().lexeme;
 
@@ -357,7 +433,7 @@ private:
 
                 if (!check(TOK_CLOSE_PAREN)) {
                     do {
-                        args.push_back(parseExpression());
+                        args.push_back(parseComparison());
                     } while (match(TOK_COMMA));
                 }
 
@@ -374,7 +450,7 @@ private:
 
     std::unique_ptr<ExprAST> parseExpression() {
         if (match(TOK_RETURN)) {
-            auto expr = parseExpression();
+            auto expr = parseComparison();
             consume(TOK_SEMI, "Expected ';' after return statement");
             return std::make_unique<ReturnExprAST>(std::move(expr));
         } else if (match(TOK_CONST) || match(TOK_VAR)) {
@@ -391,18 +467,69 @@ private:
 
             consume(TOK_EQUAL, "Expected '=' after variable name");
 
-            auto init = parseExpression();
+            auto init = parseComparison();
             consume(TOK_SEMI, "Expected ';' after variable declaration");
 
             return std::make_unique<VarDeclAST>(name, type, isConst, std::move(init));
+        } else if (match(TOK_IF)) {
+            consume(TOK_OPEN_PAREN, "Expected '(' after 'if'");
+            auto condition = parseComparison();
+            consume(TOK_CLOSE_PAREN, "Expected ')' after if condition");
+            
+            consume(TOK_OPEN_BRACE, "Expected '{' after if condition");
+            std::vector<std::unique_ptr<ExprAST>> thenBody;
+            while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
+                thenBody.push_back(parseExpression());
+            }
+            consume(TOK_CLOSE_BRACE, "Expected '}' after if body");
+            
+            std::vector<std::unique_ptr<ExprAST>> elseBody;
+            if (match(TOK_ELSE)) {
+                consume(TOK_OPEN_BRACE, "Expected '{' after 'else'");
+                while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
+                    elseBody.push_back(parseExpression());
+                }
+                consume(TOK_CLOSE_BRACE, "Expected '}' after else body");
+            }
+            
+            return std::make_unique<IfExprAST>(std::move(condition), std::move(thenBody), std::move(elseBody));
         }
 
-        // Parse binary expressions
+        return parseComparison();
+    }
+
+    std::unique_ptr<ExprAST> parseComparison() {
+        auto LHS = parseAddition();
+
+        if (match(TOK_EQUAL_EQUAL)) {
+            auto RHS = parseAddition();
+            return std::make_unique<BinaryExprAST>("==", std::move(LHS), std::move(RHS));
+        } else if (match(TOK_NOT_EQUAL)) {
+            auto RHS = parseAddition();
+            return std::make_unique<BinaryExprAST>("!=", std::move(LHS), std::move(RHS));
+        } else if (match(TOK_LESS)) {
+            auto RHS = parseAddition();
+            return std::make_unique<BinaryExprAST>("<", std::move(LHS), std::move(RHS));
+        } else if (match(TOK_LESS_EQUAL)) {
+            auto RHS = parseAddition();
+            return std::make_unique<BinaryExprAST>("<=", std::move(LHS), std::move(RHS));
+        } else if (match(TOK_GREATER)) {
+            auto RHS = parseAddition();
+            return std::make_unique<BinaryExprAST>(">", std::move(LHS), std::move(RHS));
+        } else if (match(TOK_GREATER_EQUAL)) {
+            auto RHS = parseAddition();
+            return std::make_unique<BinaryExprAST>(">=", std::move(LHS), std::move(RHS));
+        }
+
+        return LHS;
+    }
+
+    std::unique_ptr<ExprAST> parseAddition() {
         auto LHS = parsePrimary();
 
         if (match(TOK_PLUS)) {
             auto RHS = parsePrimary();
-            return std::make_unique<BinaryExprAST>('+', std::move(LHS), std::move(RHS));
+            return std::make_unique<BinaryExprAST>("+", std::move(LHS), std::move(RHS));
         }
 
         return LHS;
@@ -472,6 +599,8 @@ llvm::Type* getTypeFromString(const std::string& typeStr, llvm::LLVMContext& con
         return llvm::Type::getInt16Ty(context);
     } else if (typeStr == "u32" || typeStr == "i32") {
         return llvm::Type::getInt32Ty(context);
+    } else if (typeStr == "bool") {
+        return llvm::Type::getInt1Ty(context);
     }
     throw std::runtime_error("Unknown type: " + typeStr);
 }
@@ -498,6 +627,10 @@ llvm::Value* NumberExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* Th
     return llvm::ConstantInt::get(IntType, Val, true);
 }
 
+llvm::Value* BooleanExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
+    return llvm::ConstantInt::get(llvm::Type::getInt1Ty(TheModule->getContext()), Val ? 1 : 0);
+}
+
 llvm::Value* VariableExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
     llvm::Value* V = NamedValues[Name];
     if (!V)
@@ -516,10 +649,22 @@ llvm::Value* BinaryExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* Th
     if (!L || !R)
         return nullptr;
 
-    if (Op == '+')
+    if (Op == "+")
         return Builder.CreateAdd(L, R, "addtmp");
+    else if (Op == "==")
+        return Builder.CreateICmpEQ(L, R, "cmptmp");
+    else if (Op == "!=")
+        return Builder.CreateICmpNE(L, R, "cmptmp");
+    else if (Op == "<")
+        return Builder.CreateICmpULT(L, R, "cmptmp");
+    else if (Op == "<=")
+        return Builder.CreateICmpULE(L, R, "cmptmp");
+    else if (Op == ">")
+        return Builder.CreateICmpUGT(L, R, "cmptmp");
+    else if (Op == ">=")
+        return Builder.CreateICmpUGE(L, R, "cmptmp");
 
-    throw std::runtime_error("Invalid binary operator");
+    throw std::runtime_error("Invalid binary operator: " + Op);
 }
 
 llvm::Value* CallExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
@@ -560,6 +705,56 @@ llvm::Value* VarDeclAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheMo
 
     NamedValues[Name] = Alloca;
     return Alloca;
+}
+
+llvm::Value* IfExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
+    llvm::Value* CondV = Condition->codegen(Builder, TheModule, NamedValues);
+    if (!CondV)
+        return nullptr;
+
+    // Convert condition to a bool by comparing non-equal to 0
+    CondV = Builder.CreateICmpNE(CondV, llvm::ConstantInt::get(CondV->getType(), 0), "ifcond");
+
+    llvm::Function* TheFunction = Builder.GetInsertBlock()->getParent();
+
+    // Create blocks for the then and else cases. Insert the 'then' block at the end of the function.
+    llvm::BasicBlock* ThenBB = llvm::BasicBlock::Create(TheModule->getContext(), "then", TheFunction);
+    llvm::BasicBlock* ElseBB = llvm::BasicBlock::Create(TheModule->getContext(), "else", TheFunction);
+    llvm::BasicBlock* MergeBB = llvm::BasicBlock::Create(TheModule->getContext(), "ifcont", TheFunction);
+
+    Builder.CreateCondBr(CondV, ThenBB, ElseBB);
+
+    // Emit then value.
+    Builder.SetInsertPoint(ThenBB);
+    llvm::Value* ThenV = nullptr;
+    for (auto& Expr : ThenBody) {
+        ThenV = Expr->codegen(Builder, TheModule, NamedValues);
+    }
+    // Only create branch if the block doesn't already have a terminator (like return)
+    if (!Builder.GetInsertBlock()->getTerminator()) {
+        Builder.CreateBr(MergeBB);
+    }
+    // Codegen of 'Then' can change the current block, update ThenBB for the PHI.
+    ThenBB = Builder.GetInsertBlock();
+
+    // Emit else block.
+    Builder.SetInsertPoint(ElseBB);
+    llvm::Value* ElseV = nullptr;
+    for (auto& Expr : ElseBody) {
+        ElseV = Expr->codegen(Builder, TheModule, NamedValues);
+    }
+    // Only create branch if the block doesn't already have a terminator (like return)
+    if (!Builder.GetInsertBlock()->getTerminator()) {
+        Builder.CreateBr(MergeBB);
+    }
+    // Codegen of 'Else' can change the current block, update ElseBB for the PHI.
+    ElseBB = Builder.GetInsertBlock();
+
+    // Emit merge block.
+    Builder.SetInsertPoint(MergeBB);
+
+    // For now, if statements don't return values, so we return a dummy value
+    return llvm::ConstantInt::get(llvm::Type::getInt8Ty(TheModule->getContext()), 0);
 }
 
 llvm::Function* FunctionAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {

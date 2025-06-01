@@ -1,0 +1,47 @@
+// Comprehensive bool demonstration
+fn test_bool_comprehensive() -> bool {
+    const isReady: bool = true;
+    const isActive: bool = false;
+    var canProceed: bool = true;
+    
+    if (isReady == true) {
+        if (isActive != true) {
+            if (canProceed == true) {
+                return true;
+            } else {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    } else {
+        return false;
+    }
+}
+
+fn test_bool_with_numbers() -> u8 {
+    const flag: bool = true;
+    const value: u8 = 42;
+    
+    if (flag == true) {
+        if (value > 40) {
+            return 100;
+        } else {
+            return 50;
+        }
+    } else {
+        return 0;
+    }
+}
+
+fn test_bool_function_calls(enabled: bool, count: u8) -> bool {
+    if (enabled == true) {
+        if (count > 0) {
+            return true;
+        } else {
+            return false;
+        }
+    } else {
+        return false;
+    }
+}

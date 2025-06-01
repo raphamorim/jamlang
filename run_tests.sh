@@ -88,6 +88,14 @@ verify_ir "$TEST_DIR/test_u32.jam" "i32"
 # Test mixed types
 run_test "$TEST_DIR/test_mixed_types.jam"
 
+# Test if/else functionality
+run_test "$TEST_DIR/test_if_else.jam"
+run_test "$TEST_DIR/test_if_simple.jam"
+
+# Test bool functionality
+run_test "$TEST_DIR/test_bool.jam"
+run_test "$TEST_DIR/test_bool_mixed.jam"
+
 echo ""
 echo "🧪 Running specific IR verification tests..."
 
@@ -115,6 +123,46 @@ fi
 echo -n "🔬 Checking u32 very large values... "
 $COMPILER "$TEST_DIR/test_u32.jam" > /tmp/u32_ir.txt 2>&1
 if grep -q "i32.*4294967295\|i32.*1000000" /tmp/u32_ir.txt; then
+    echo "✅ PASS"
+    ((PASSED++))
+else
+    echo "❌ FAIL"
+    ((FAILED++))
+fi
+
+echo -n "🔬 Checking if/else IR generation... "
+$COMPILER "$TEST_DIR/test_if_else.jam" > /tmp/if_ir.txt 2>&1
+if grep -q "icmp eq\|br i1\|label %then\|label %else" /tmp/if_ir.txt; then
+    echo "✅ PASS"
+    ((PASSED++))
+else
+    echo "❌ FAIL"
+    ((FAILED++))
+fi
+
+echo -n "🔬 Checking comparison operators... "
+$COMPILER "$TEST_DIR/test_if_else.jam" > /tmp/cmp_ir.txt 2>&1
+if grep -q "icmp ugt\|icmp eq\|icmp ne\|icmp ult\|icmp uge" /tmp/cmp_ir.txt; then
+    echo "✅ PASS"
+    ((PASSED++))
+else
+    echo "❌ FAIL"
+    ((FAILED++))
+fi
+
+echo -n "🔬 Checking bool type IR generation... "
+$COMPILER "$TEST_DIR/test_bool.jam" > /tmp/bool_ir.txt 2>&1
+if grep -q "i1\|true\|false" /tmp/bool_ir.txt; then
+    echo "✅ PASS"
+    ((PASSED++))
+else
+    echo "❌ FAIL"
+    ((FAILED++))
+fi
+
+echo -n "🔬 Checking bool function signatures... "
+$COMPILER "$TEST_DIR/test_bool.jam" > /tmp/bool_func_ir.txt 2>&1
+if grep -q "define i1.*bool\|i1 %flag" /tmp/bool_func_ir.txt; then
     echo "✅ PASS"
     ((PASSED++))
 else
