@@ -12,6 +12,9 @@
 #include <memory>
 #include <string>
 #include <stdexcept>
+#include <map>
+#include <optional>
+#include <cstdint>
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
@@ -19,13 +22,13 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/TargetParser/Host.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/TargetSelect.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/CodeGen/TargetPassConfig.h"
 
 // Token types
 enum TokenType {
@@ -41,6 +44,7 @@ enum TokenType {
     TOK_COMMA,
     TOK_RETURN,
     TOK_PLUS,
+    TOK_MINUS,
     TOK_SEMI,
     TOK_NUMBER,
     TOK_CONST,
@@ -139,9 +143,10 @@ private:
     }
 
     void identifier() {
+        int start = current - 1; // Start position (we already consumed the first character)
         while (isAlphaNumeric(peek())) advance();
 
-        std::string text = source.substr(current - (current - (current - source.find_last_not_of(" \t\r\n", current - 1) - 1)), current - source.find_last_not_of(" \t\r\n", current - 1) - 1);
+        std::string text = source.substr(start, current - start);
 
         // Check for keywords
         if (text == "fn") {
@@ -152,7 +157,7 @@ private:
             addToken(TOK_CONST, text);
         } else if (text == "var") {
             addToken(TOK_VAR, text);
-        } else if (text == "u8") {
+        } else if (text == "u8" || text == "u16" || text == "u32" || text == "i8" || text == "i16" || text == "i32") {
             addToken(TOK_TYPE, text);
         } else {
             addToken(TOK_IDENTIFIER, text);
@@ -160,9 +165,18 @@ private:
     }
 
     void number() {
+        int start = current - 1; // Start position (we already consumed the first digit)
         while (isDigit(peek())) advance();
 
-        std::string num = source.substr(current - 1, 1);
+        std::string num = source.substr(start, current - start);
+        addToken(TOK_NUMBER, num);
+    }
+
+    void negativeNumber() {
+        int start = current - 1; // Start position (we already consumed the minus)
+        while (isDigit(peek())) advance();
+
+        std::string num = source.substr(start, current - start);
         addToken(TOK_NUMBER, num);
     }
 
@@ -190,8 +204,11 @@ public:
                 case '-':
                     if (match('>')) {
                         addToken(TOK_ARROW, "->");
+                    } else if (isDigit(peek())) {
+                        // Handle negative number
+                        negativeNumber();
                     } else {
-                        // Handle minus operator if needed
+                        addToken(TOK_MINUS, "-");
                     }
                     break;
 
@@ -220,9 +237,9 @@ public:
 };
 
 class NumberExprAST : public ExprAST {
-    int Val;
+    int64_t Val;
 public:
-    NumberExprAST(int Val) : Val(Val) {}
+    NumberExprAST(int64_t Val) : Val(Val) {}
     llvm::Value* codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) override;
 };
 
@@ -260,11 +277,12 @@ public:
 
 class VarDeclAST : public ExprAST {
     std::string Name;
+    std::string Type;
     bool IsConst;
     std::unique_ptr<ExprAST> Init;
 public:
-    VarDeclAST(std::string Name, bool IsConst, std::unique_ptr<ExprAST> Init)
-        : Name(std::move(Name)), IsConst(IsConst), Init(std::move(Init)) {}
+    VarDeclAST(std::string Name, std::string Type, bool IsConst, std::unique_ptr<ExprAST> Init)
+        : Name(std::move(Name)), Type(std::move(Type)), IsConst(IsConst), Init(std::move(Init)) {}
     llvm::Value* codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) override;
 };
 
@@ -327,9 +345,9 @@ private:
         throw std::runtime_error(message);
     }
 
-    std::unique_ptr<ExprAST> parseExpression() {
+    std::unique_ptr<ExprAST> parsePrimary() {
         if (match(TOK_NUMBER)) {
-            return std::make_unique<NumberExprAST>(std::stoi(previous().lexeme));
+            return std::make_unique<NumberExprAST>(std::stoll(previous().lexeme));
         } else if (match(TOK_IDENTIFIER)) {
             std::string name = previous().lexeme;
 
@@ -349,7 +367,13 @@ private:
             }
 
             return std::make_unique<VariableExprAST>(name);
-        } else if (match(TOK_RETURN)) {
+        }
+
+        throw std::runtime_error("Expected primary expression");
+    }
+
+    std::unique_ptr<ExprAST> parseExpression() {
+        if (match(TOK_RETURN)) {
             auto expr = parseExpression();
             consume(TOK_SEMI, "Expected ';' after return statement");
             return std::make_unique<ReturnExprAST>(std::move(expr));
@@ -358,19 +382,26 @@ private:
             consume(TOK_IDENTIFIER, "Expected variable name");
             std::string name = previous().lexeme;
 
+            // Optional type annotation
+            std::string type = "u8"; // Default type
+            if (match(TOK_COLON)) {
+                consume(TOK_TYPE, "Expected type after ':'");
+                type = previous().lexeme;
+            }
+
             consume(TOK_EQUAL, "Expected '=' after variable name");
 
             auto init = parseExpression();
             consume(TOK_SEMI, "Expected ';' after variable declaration");
 
-            return std::make_unique<VarDeclAST>(name, isConst, std::move(init));
+            return std::make_unique<VarDeclAST>(name, type, isConst, std::move(init));
         }
 
-        // Binary expressions
-        auto LHS = parseExpression();
+        // Parse binary expressions
+        auto LHS = parsePrimary();
 
         if (match(TOK_PLUS)) {
-            auto RHS = parseExpression();
+            auto RHS = parsePrimary();
             return std::make_unique<BinaryExprAST>('+', std::move(LHS), std::move(RHS));
         }
 
@@ -433,16 +464,49 @@ public:
     }
 };
 
+// Helper function to get LLVM type from type string
+llvm::Type* getTypeFromString(const std::string& typeStr, llvm::LLVMContext& context) {
+    if (typeStr == "u8" || typeStr == "i8") {
+        return llvm::Type::getInt8Ty(context);
+    } else if (typeStr == "u16" || typeStr == "i16") {
+        return llvm::Type::getInt16Ty(context);
+    } else if (typeStr == "u32" || typeStr == "i32") {
+        return llvm::Type::getInt32Ty(context);
+    }
+    throw std::runtime_error("Unknown type: " + typeStr);
+}
+
 // Code generation implementations
 llvm::Value* NumberExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
-    return llvm::ConstantInt::get(llvm::Type::getInt8Ty(TheModule->getContext()), Val, true);
+    // Choose appropriate type based on value range
+    llvm::Type* IntType;
+    if (Val >= 0 && Val <= 255) {
+        IntType = llvm::Type::getInt8Ty(TheModule->getContext());
+    } else if (Val >= -128 && Val < 0) {
+        IntType = llvm::Type::getInt8Ty(TheModule->getContext());
+    } else if (Val >= 0 && Val <= 65535) {
+        IntType = llvm::Type::getInt16Ty(TheModule->getContext());
+    } else if (Val >= -32768 && Val < 0) {
+        IntType = llvm::Type::getInt16Ty(TheModule->getContext());
+    } else if (Val >= 0 && Val <= 4294967295ULL) {
+        IntType = llvm::Type::getInt32Ty(TheModule->getContext());
+    } else if (Val >= -2147483648LL && Val < 0) {
+        IntType = llvm::Type::getInt32Ty(TheModule->getContext());
+    } else {
+        IntType = llvm::Type::getInt64Ty(TheModule->getContext());
+    }
+    return llvm::ConstantInt::get(IntType, Val, true);
 }
 
 llvm::Value* VariableExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
     llvm::Value* V = NamedValues[Name];
     if (!V)
         throw std::runtime_error("Unknown variable name: " + Name);
-    return Builder.CreateLoad(llvm::Type::getInt8Ty(TheModule->getContext()), V, Name.c_str());
+    
+    // Get the type from the allocated value (for newer LLVM versions)
+    llvm::AllocaInst* Alloca = llvm::cast<llvm::AllocaInst>(V);
+    llvm::Type* LoadType = Alloca->getAllocatedType();
+    return Builder.CreateLoad(LoadType, V, Name.c_str());
 }
 
 llvm::Value* BinaryExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
@@ -477,7 +541,7 @@ llvm::Value* CallExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheM
 }
 
 llvm::Value* ReturnExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
-    llvm::Value* RetVal = RetVal->codegen(Builder, TheModule, NamedValues);
+    llvm::Value* RetVal = this->RetVal->codegen(Builder, TheModule, NamedValues);
     if (!RetVal)
         return nullptr;
 
@@ -490,7 +554,8 @@ llvm::Value* VarDeclAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheMo
     if (!InitVal)
         return nullptr;
 
-    llvm::AllocaInst* Alloca = Builder.CreateAlloca(llvm::Type::getInt8Ty(TheModule->getContext()), nullptr, Name);
+    llvm::Type* VarType = getTypeFromString(Type, TheModule->getContext());
+    llvm::AllocaInst* Alloca = Builder.CreateAlloca(VarType, nullptr, Name);
     Builder.CreateStore(InitVal, Alloca);
 
     NamedValues[Name] = Alloca;
@@ -499,12 +564,19 @@ llvm::Value* VarDeclAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheMo
 
 llvm::Function* FunctionAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
     // Create function prototype
-    std::vector<llvm::Type*> ArgTypes(Args.size(), llvm::Type::getInt8Ty(TheModule->getContext()));
+    std::vector<llvm::Type*> ArgTypes;
+    for (const auto& arg : Args) {
+        ArgTypes.push_back(getTypeFromString(arg.second, TheModule->getContext()));
+    }
+
+    llvm::Type* RetType = ReturnType.empty() ? 
+        llvm::Type::getVoidTy(TheModule->getContext()) : 
+        getTypeFromString(ReturnType, TheModule->getContext());
 
     llvm::FunctionType* FT = llvm::FunctionType::get(
-        llvm::Type::getInt8Ty(TheModule->getContext()),  // Return type (assuming u8)
-        ArgTypes,                                        // Arg types
-        false                                           // Not vararg
+        RetType,        // Return type
+        ArgTypes,       // Arg types
+        false          // Not vararg
     );
 
     llvm::Function* F = llvm::Function::Create(
@@ -515,9 +587,9 @@ llvm::Function* FunctionAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* T
     );
 
     // Set names for all arguments
-    unsigned Idx = 0;
+    unsigned ArgIdx = 0;
     for (auto& Arg : F->args())
-        Arg.setName(Args[Idx++].first);
+        Arg.setName(Args[ArgIdx++].first);
 
     // Create a new basic block to start insertion into
     llvm::BasicBlock* BB = llvm::BasicBlock::Create(TheModule->getContext(), "entry", F);
@@ -525,15 +597,18 @@ llvm::Function* FunctionAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* T
 
     // Record the function arguments in the NamedValues map
     NamedValues.clear();
+    unsigned Idx = 0;
     for (auto& Arg : F->args()) {
-        // Create an alloca for this variable
-        llvm::AllocaInst* Alloca = Builder.CreateAlloca(llvm::Type::getInt8Ty(TheModule->getContext()), nullptr, Arg.getName());
+        // Create an alloca for this variable using the correct type
+        llvm::Type* ArgType = getTypeFromString(Args[Idx].second, TheModule->getContext());
+        llvm::AllocaInst* Alloca = Builder.CreateAlloca(ArgType, nullptr, Arg.getName());
 
         // Store the initial value into the alloca
         Builder.CreateStore(&Arg, Alloca);
 
         // Add arguments to variable symbol table
         NamedValues[std::string(Arg.getName())] = Alloca;
+        Idx++;
     }
 
     // Generate code for each expression in the function body
@@ -600,7 +675,7 @@ int main(int argc, char* argv[]) {
     std::cout << output;
 
     // Now create the output binary
-    auto TargetTriple = llvm::sys::getDefaultTargetTriple();
+    std::string TargetTriple = llvm::sys::getDefaultTargetTriple();
     TheModule->setTargetTriple(TargetTriple);
 
     std::string Error;
@@ -612,7 +687,7 @@ int main(int argc, char* argv[]) {
     }
 
     llvm::TargetOptions opt;
-    auto RM = llvm::Optional<llvm::Reloc::Model>();
+    auto RM = std::optional<llvm::Reloc::Model>();
     auto TargetMachine = Target->createTargetMachine(TargetTriple, "generic", "", opt, RM);
 
     TheModule->setDataLayout(TargetMachine->createDataLayout());
@@ -627,7 +702,7 @@ int main(int argc, char* argv[]) {
     }
 
     llvm::legacy::PassManager pass;
-    if (TargetMachine->addPassesToEmitFile(pass, dest, nullptr, llvm::CGFT_ObjectFile)) {
+    if (TargetMachine->addPassesToEmitFile(pass, dest, nullptr, llvm::CodeGenFileType::ObjectFile)) {
         std::cerr << "TargetMachine can't emit a file of this type" << std::endl;
         return 1;
     }
