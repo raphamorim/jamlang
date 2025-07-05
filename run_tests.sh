@@ -96,6 +96,13 @@ run_test "$TEST_DIR/test_if_simple.jam"
 run_test "$TEST_DIR/test_bool.jam"
 run_test "$TEST_DIR/test_bool_mixed.jam"
 
+# Test string functionality
+run_test "$TEST_DIR/test_string.jam"
+
+# Test slice functionality
+run_test "$TEST_DIR/test_slices.jam"
+run_test "$TEST_DIR/test_mixed_slices.jam"
+
 echo ""
 echo "🧪 Running specific IR verification tests..."
 
@@ -163,6 +170,36 @@ fi
 echo -n "🔬 Checking bool function signatures... "
 $COMPILER "$TEST_DIR/test_bool.jam" > /tmp/bool_func_ir.txt 2>&1
 if grep -q "define i1.*bool\|i1 %flag" /tmp/bool_func_ir.txt; then
+    echo "✅ PASS"
+    ((PASSED++))
+else
+    echo "❌ FAIL"
+    ((FAILED++))
+fi
+
+echo -n "🔬 Checking string slice IR generation... "
+$COMPILER "$TEST_DIR/test_string.jam" > /tmp/string_ir.txt 2>&1
+if grep -q "{ ptr, i64 }\|@str.*constant.*c\"" /tmp/string_ir.txt; then
+    echo "✅ PASS"
+    ((PASSED++))
+else
+    echo "❌ FAIL"
+    ((FAILED++))
+fi
+
+echo -n "🔬 Checking slice type IR generation... "
+$COMPILER "$TEST_DIR/test_slices.jam" > /tmp/slice_ir.txt 2>&1
+if grep -q "{ ptr, i64 }\|zeroinitializer" /tmp/slice_ir.txt; then
+    echo "✅ PASS"
+    ((PASSED++))
+else
+    echo "❌ FAIL"
+    ((FAILED++))
+fi
+
+echo -n "🔬 Checking UTF-8 string handling... "
+$COMPILER "$TEST_DIR/test_string.jam" > /tmp/utf8_ir.txt 2>&1
+if grep -q "\\\\E4\\\\B8\\\\96\\\\E7\\\\95\\\\8C\|\\\\F0\\\\9F\\\\8C\\\\8D" /tmp/utf8_ir.txt; then
     echo "✅ PASS"
     ((PASSED++))
 else

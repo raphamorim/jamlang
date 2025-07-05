@@ -61,6 +61,9 @@ enum TokenType {
     TOK_GREATER_EQUAL,
     TOK_TRUE,
     TOK_FALSE,
+    TOK_OPEN_BRACKET,
+    TOK_CLOSE_BRACKET,
+    TOK_STRING_LITERAL,
 };
 
 // Token structure
@@ -175,7 +178,7 @@ private:
             addToken(TOK_TRUE, text);
         } else if (text == "false") {
             addToken(TOK_FALSE, text);
-        } else if (text == "u8" || text == "u16" || text == "u32" || text == "i8" || text == "i16" || text == "i32" || text == "bool") {
+        } else if (text == "u8" || text == "u16" || text == "u32" || text == "i8" || text == "i16" || text == "i32" || text == "bool" || text == "str") {
             addToken(TOK_TYPE, text);
         } else {
             addToken(TOK_IDENTIFIER, text);
@@ -198,6 +201,26 @@ private:
         addToken(TOK_NUMBER, num);
     }
 
+    void stringLiteral() {
+        int start = current; // Start after the opening quote
+        
+        while (peek() != '"' && !isAtEnd()) {
+            if (peek() == '\n') line++;
+            advance();
+        }
+
+        if (isAtEnd()) {
+            throw std::runtime_error("Unterminated string at line " + std::to_string(line));
+        }
+
+        // The closing "
+        advance();
+
+        // Trim the surrounding quotes
+        std::string value = source.substr(start, current - start - 1);
+        addToken(TOK_STRING_LITERAL, value);
+    }
+
 public:
     explicit Lexer(std::string source) : source(std::move(source)) {}
 
@@ -213,10 +236,13 @@ public:
                 case ')': addToken(TOK_CLOSE_PAREN, ")"); break;
                 case '{': addToken(TOK_OPEN_BRACE, "{"); break;
                 case '}': addToken(TOK_CLOSE_BRACE, "}"); break;
+                case '[': addToken(TOK_OPEN_BRACKET, "["); break;
+                case ']': addToken(TOK_CLOSE_BRACKET, "]"); break;
                 case ',': addToken(TOK_COMMA, ","); break;
                 case ';': addToken(TOK_SEMI, ";"); break;
                 case ':': addToken(TOK_COLON, ":"); break;
                 case '+': addToken(TOK_PLUS, "+"); break;
+                case '"': stringLiteral(); break;
                 
                 case '=':
                     if (match('=')) {
@@ -296,6 +322,13 @@ class BooleanExprAST : public ExprAST {
     bool Val;
 public:
     BooleanExprAST(bool Val) : Val(Val) {}
+    llvm::Value* codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) override;
+};
+
+class StringLiteralExprAST : public ExprAST {
+    std::string Val;
+public:
+    StringLiteralExprAST(std::string Val) : Val(std::move(Val)) {}
     llvm::Value* codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) override;
 };
 
@@ -420,6 +453,8 @@ private:
             return std::make_unique<BooleanExprAST>(true);
         } else if (match(TOK_FALSE)) {
             return std::make_unique<BooleanExprAST>(false);
+        } else if (match(TOK_STRING_LITERAL)) {
+            return std::make_unique<StringLiteralExprAST>(previous().lexeme);
         } else if (match(TOK_OPEN_PAREN)) {
             auto expr = parseExpression();
             consume(TOK_CLOSE_PAREN, "Expected ')' after expression");
@@ -448,6 +483,18 @@ private:
         throw std::runtime_error("Expected primary expression");
     }
 
+    std::string parseType() {
+        if (match(TOK_OPEN_BRACKET)) {
+            consume(TOK_CLOSE_BRACKET, "Expected ']' after '['");
+            std::string elementType = parseType();
+            return "[]" + elementType;
+        } else if (match(TOK_TYPE)) {
+            return previous().lexeme;
+        } else {
+            throw std::runtime_error("Expected type");
+        }
+    }
+
     std::unique_ptr<ExprAST> parseExpression() {
         if (match(TOK_RETURN)) {
             auto expr = parseComparison();
@@ -461,13 +508,13 @@ private:
             // Optional type annotation
             std::string type = "u8"; // Default type
             if (match(TOK_COLON)) {
-                consume(TOK_TYPE, "Expected type after ':'");
-                type = previous().lexeme;
+                type = parseType();
             }
 
-            consume(TOK_EQUAL, "Expected '=' after variable name");
-
-            auto init = parseComparison();
+            std::unique_ptr<ExprAST> init = nullptr;
+            if (match(TOK_EQUAL)) {
+                init = parseComparison();
+            }
             consume(TOK_SEMI, "Expected ';' after variable declaration");
 
             return std::make_unique<VarDeclAST>(name, type, isConst, std::move(init));
@@ -549,8 +596,7 @@ private:
                 std::string paramName = previous().lexeme;
 
                 consume(TOK_COLON, "Expected ':' after parameter name");
-                consume(TOK_TYPE, "Expected parameter type");
-                std::string paramType = previous().lexeme;
+                std::string paramType = parseType();
 
                 args.emplace_back(paramName, paramType);
             } while (match(TOK_COMMA));
@@ -561,8 +607,7 @@ private:
         // Parse the return type
         std::string returnType;
         if (match(TOK_ARROW)) {
-            consume(TOK_TYPE, "Expected return type");
-            returnType = previous().lexeme;
+            returnType = parseType();
         }
 
         consume(TOK_OPEN_BRACE, "Expected '{' before function body");
@@ -601,6 +646,18 @@ llvm::Type* getTypeFromString(const std::string& typeStr, llvm::LLVMContext& con
         return llvm::Type::getInt32Ty(context);
     } else if (typeStr == "bool") {
         return llvm::Type::getInt1Ty(context);
+    } else if (typeStr == "str") {
+        // String slice: struct { ptr: *u8, len: usize }
+        llvm::Type* i8PtrType = llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0);
+        llvm::Type* usizeType = llvm::Type::getInt64Ty(context); // usize as i64
+        return llvm::StructType::get(context, {i8PtrType, usizeType});
+    } else if (typeStr.substr(0, 2) == "[]") {
+        // Slice type: []T -> struct { ptr: *T, len: usize }
+        std::string elementType = typeStr.substr(2); // Remove "[]"
+        llvm::Type* elemType = getTypeFromString(elementType, context);
+        llvm::Type* elemPtrType = llvm::PointerType::get(elemType, 0);
+        llvm::Type* usizeType = llvm::Type::getInt64Ty(context); // usize as i64
+        return llvm::StructType::get(context, {elemPtrType, usizeType});
     }
     throw std::runtime_error("Unknown type: " + typeStr);
 }
@@ -629,6 +686,34 @@ llvm::Value* NumberExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* Th
 
 llvm::Value* BooleanExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
     return llvm::ConstantInt::get(llvm::Type::getInt1Ty(TheModule->getContext()), Val ? 1 : 0);
+}
+
+llvm::Value* StringLiteralExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
+    // Create a global string constant
+    llvm::Constant* StrConstant = llvm::ConstantDataArray::getString(TheModule->getContext(), Val, false);
+    llvm::GlobalVariable* StrGlobal = new llvm::GlobalVariable(
+        *TheModule,
+        StrConstant->getType(),
+        true, // isConstant
+        llvm::GlobalValue::PrivateLinkage,
+        StrConstant,
+        "str"
+    );
+    
+    // Create a string slice struct { ptr: *u8, len: usize }
+    llvm::Type* i8PtrType = llvm::PointerType::get(llvm::Type::getInt8Ty(TheModule->getContext()), 0);
+    llvm::Type* usizeType = llvm::Type::getInt64Ty(TheModule->getContext());
+    llvm::Type* sliceType = llvm::StructType::get(TheModule->getContext(), {i8PtrType, usizeType});
+    
+    // Get pointer to the string data
+    llvm::Value* StrPtr = Builder.CreateBitCast(StrGlobal, i8PtrType);
+    
+    // Create the slice struct
+    llvm::Value* SliceStruct = llvm::UndefValue::get(sliceType);
+    SliceStruct = Builder.CreateInsertValue(SliceStruct, StrPtr, 0); // ptr
+    SliceStruct = Builder.CreateInsertValue(SliceStruct, llvm::ConstantInt::get(usizeType, Val.length()), 1); // len
+    
+    return SliceStruct;
 }
 
 llvm::Value* VariableExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
@@ -695,13 +780,19 @@ llvm::Value* ReturnExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* Th
 }
 
 llvm::Value* VarDeclAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
-    llvm::Value* InitVal = Init->codegen(Builder, TheModule, NamedValues);
-    if (!InitVal)
-        return nullptr;
-
     llvm::Type* VarType = getTypeFromString(Type, TheModule->getContext());
     llvm::AllocaInst* Alloca = Builder.CreateAlloca(VarType, nullptr, Name);
-    Builder.CreateStore(InitVal, Alloca);
+    
+    if (Init) {
+        llvm::Value* InitVal = Init->codegen(Builder, TheModule, NamedValues);
+        if (!InitVal)
+            return nullptr;
+        Builder.CreateStore(InitVal, Alloca);
+    } else {
+        // Initialize with zero/null value
+        llvm::Value* ZeroVal = llvm::Constant::getNullValue(VarType);
+        Builder.CreateStore(ZeroVal, Alloca);
+    }
 
     NamedValues[Name] = Alloca;
     return Alloca;
