@@ -9,4 +9,5 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_executable(jam_tests 
     external_tests.cpp 
     test_print_functions.cpp
+    test_loops.cpp
 )

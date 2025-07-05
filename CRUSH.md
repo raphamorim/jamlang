@@ -22,6 +22,8 @@
 - **Variables**: Use `const` for immutable, `var` for mutable in Jam
 - **Strings**: Use `str` for string slices, `"literal"` for string literals
 - **Slices**: Use `[]T` syntax for slice types (e.g., `[]u8`, `[]const u8`)
+- **Loops**: Use `for i in start:end { ... }` for range loops, `while (condition) { ... }` for conditional loops
+- **Control flow**: Use `break` and `continue` statements within loops
 - **Formatting**: Follow existing indentation and brace style
 - **Error handling**: Use LLVM error handling patterns and std::optional
 
@@ -32,3 +34,5 @@
 - **String system**: `str` type for string slices, UTF-8 by default
 - **Slice system**: `[]T` types for dynamic arrays (e.g., `[]u8`, `[]i32`)
 - **Memory representation**: Slices as `{ptr, len}` structs in LLVM IR
+- **Loop system**: For loops with range syntax `for i in start:end`, while loops with conditions
+- **Control flow**: Break/continue statements with proper LLVM basic block management

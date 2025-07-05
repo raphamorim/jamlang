@@ -64,6 +64,11 @@ enum TokenType {
     TOK_OPEN_BRACKET,
     TOK_CLOSE_BRACKET,
     TOK_STRING_LITERAL,
+    TOK_WHILE,
+    TOK_FOR,
+    TOK_BREAK,
+    TOK_CONTINUE,
+    TOK_IN,
 };
 
 // Token structure
@@ -174,6 +179,16 @@ private:
             addToken(TOK_IF, text);
         } else if (text == "else") {
             addToken(TOK_ELSE, text);
+        } else if (text == "while") {
+            addToken(TOK_WHILE, text);
+        } else if (text == "for") {
+            addToken(TOK_FOR, text);
+        } else if (text == "break") {
+            addToken(TOK_BREAK, text);
+        } else if (text == "continue") {
+            addToken(TOK_CONTINUE, text);
+        } else if (text == "in") {
+            addToken(TOK_IN, text);
         } else if (text == "true") {
             addToken(TOK_TRUE, text);
         } else if (text == "false") {
@@ -392,6 +407,38 @@ public:
     llvm::Value* codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) override;
 };
 
+class WhileExprAST : public ExprAST {
+    std::unique_ptr<ExprAST> Condition;
+    std::vector<std::unique_ptr<ExprAST>> Body;
+public:
+    WhileExprAST(std::unique_ptr<ExprAST> Condition, std::vector<std::unique_ptr<ExprAST>> Body)
+        : Condition(std::move(Condition)), Body(std::move(Body)) {}
+    llvm::Value* codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) override;
+};
+
+class ForExprAST : public ExprAST {
+    std::string VarName;
+    std::unique_ptr<ExprAST> Start;
+    std::unique_ptr<ExprAST> End;
+    std::vector<std::unique_ptr<ExprAST>> Body;
+public:
+    ForExprAST(std::string VarName, std::unique_ptr<ExprAST> Start, std::unique_ptr<ExprAST> End, std::vector<std::unique_ptr<ExprAST>> Body)
+        : VarName(std::move(VarName)), Start(std::move(Start)), End(std::move(End)), Body(std::move(Body)) {}
+    llvm::Value* codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) override;
+};
+
+class BreakExprAST : public ExprAST {
+public:
+    BreakExprAST() {}
+    llvm::Value* codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) override;
+};
+
+class ContinueExprAST : public ExprAST {
+public:
+    ContinueExprAST() {}
+    llvm::Value* codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) override;
+};
+
 class FunctionAST {
 public:
     std::string Name;
@@ -545,6 +592,42 @@ private:
             }
             
             return std::make_unique<IfExprAST>(std::move(condition), std::move(thenBody), std::move(elseBody));
+        } else if (match(TOK_WHILE)) {
+            consume(TOK_OPEN_PAREN, "Expected '(' after 'while'");
+            auto condition = parseComparison();
+            consume(TOK_CLOSE_PAREN, "Expected ')' after while condition");
+            
+            consume(TOK_OPEN_BRACE, "Expected '{' after while condition");
+            std::vector<std::unique_ptr<ExprAST>> body;
+            while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
+                body.push_back(parseExpression());
+            }
+            consume(TOK_CLOSE_BRACE, "Expected '}' after while body");
+            
+            return std::make_unique<WhileExprAST>(std::move(condition), std::move(body));
+        } else if (match(TOK_FOR)) {
+            consume(TOK_IDENTIFIER, "Expected variable name after 'for'");
+            std::string varName = previous().lexeme;
+            
+            consume(TOK_IN, "Expected 'in' after for variable");
+            auto start = parseComparison();
+            consume(TOK_COLON, "Expected ':' in for range");
+            auto end = parseComparison();
+            
+            consume(TOK_OPEN_BRACE, "Expected '{' after for range");
+            std::vector<std::unique_ptr<ExprAST>> body;
+            while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
+                body.push_back(parseExpression());
+            }
+            consume(TOK_CLOSE_BRACE, "Expected '}' after for body");
+            
+            return std::make_unique<ForExprAST>(varName, std::move(start), std::move(end), std::move(body));
+        } else if (match(TOK_BREAK)) {
+            consume(TOK_SEMI, "Expected ';' after break");
+            return std::make_unique<BreakExprAST>();
+        } else if (match(TOK_CONTINUE)) {
+            consume(TOK_SEMI, "Expected ';' after continue");
+            return std::make_unique<ContinueExprAST>();
         } else if (check(TOK_IDENTIFIER)) {
             // Look ahead to see if this is a function call statement
             int saved_current = current;
@@ -948,6 +1031,167 @@ llvm::Value* IfExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheMod
     Builder.SetInsertPoint(MergeBB);
 
     // For now, if statements don't return values, so we return a dummy value
+    return llvm::ConstantInt::get(llvm::Type::getInt8Ty(TheModule->getContext()), 0);
+}
+
+// Global variables to track loop context for break/continue
+static llvm::BasicBlock* CurrentLoopContinue = nullptr;
+static llvm::BasicBlock* CurrentLoopBreak = nullptr;
+
+llvm::Value* WhileExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
+    llvm::Function* TheFunction = Builder.GetInsertBlock()->getParent();
+    
+    // Create blocks for the loop
+    llvm::BasicBlock* CondBB = llvm::BasicBlock::Create(TheModule->getContext(), "whilecond", TheFunction);
+    llvm::BasicBlock* LoopBB = llvm::BasicBlock::Create(TheModule->getContext(), "whileloop", TheFunction);
+    llvm::BasicBlock* AfterBB = llvm::BasicBlock::Create(TheModule->getContext(), "afterloop", TheFunction);
+    
+    // Save previous loop context
+    llvm::BasicBlock* PrevContinue = CurrentLoopContinue;
+    llvm::BasicBlock* PrevBreak = CurrentLoopBreak;
+    CurrentLoopContinue = CondBB;
+    CurrentLoopBreak = AfterBB;
+    
+    // Jump to condition block
+    Builder.CreateBr(CondBB);
+    
+    // Emit condition block
+    Builder.SetInsertPoint(CondBB);
+    llvm::Value* CondV = Condition->codegen(Builder, TheModule, NamedValues);
+    if (!CondV) {
+        // Restore previous loop context
+        CurrentLoopContinue = PrevContinue;
+        CurrentLoopBreak = PrevBreak;
+        return nullptr;
+    }
+    
+    // Convert condition to a bool by comparing non-equal to 0
+    CondV = Builder.CreateICmpNE(CondV, llvm::ConstantInt::get(CondV->getType(), 0), "whilecond");
+    Builder.CreateCondBr(CondV, LoopBB, AfterBB);
+    
+    // Emit loop body
+    Builder.SetInsertPoint(LoopBB);
+    for (auto& Expr : Body) {
+        Expr->codegen(Builder, TheModule, NamedValues);
+    }
+    
+    // Only create branch if the block doesn't already have a terminator
+    if (!Builder.GetInsertBlock()->getTerminator()) {
+        Builder.CreateBr(CondBB);
+    }
+    
+    // Emit after block
+    Builder.SetInsertPoint(AfterBB);
+    
+    // Restore previous loop context
+    CurrentLoopContinue = PrevContinue;
+    CurrentLoopBreak = PrevBreak;
+    
+    return llvm::ConstantInt::get(llvm::Type::getInt8Ty(TheModule->getContext()), 0);
+}
+
+llvm::Value* ForExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
+    llvm::Function* TheFunction = Builder.GetInsertBlock()->getParent();
+    
+    // Compute start and end values first
+    llvm::Value* StartVal = Start->codegen(Builder, TheModule, NamedValues);
+    llvm::Value* EndVal = End->codegen(Builder, TheModule, NamedValues);
+    if (!StartVal || !EndVal)
+        return nullptr;
+    
+    // Use the type of the start value for the loop variable
+    llvm::Type* VarType = StartVal->getType();
+    
+    // Convert end value to match start value type if needed
+    if (EndVal->getType() != VarType) {
+        if (VarType->isIntegerTy() && EndVal->getType()->isIntegerTy()) {
+            EndVal = Builder.CreateIntCast(EndVal, VarType, true, "endcast");
+        } else {
+            throw std::runtime_error("Type mismatch in for loop range");
+        }
+    }
+    
+    // Create an alloca for the loop variable
+    llvm::AllocaInst* Alloca = Builder.CreateAlloca(VarType, nullptr, VarName);
+    
+    // Store the start value
+    Builder.CreateStore(StartVal, Alloca);
+    
+    // Save the old variable binding (if any)
+    llvm::Value* OldVal = NamedValues[VarName];
+    NamedValues[VarName] = Alloca;
+    
+    // Create blocks for the loop
+    llvm::BasicBlock* CondBB = llvm::BasicBlock::Create(TheModule->getContext(), "forcond", TheFunction);
+    llvm::BasicBlock* LoopBB = llvm::BasicBlock::Create(TheModule->getContext(), "forloop", TheFunction);
+    llvm::BasicBlock* IncrBB = llvm::BasicBlock::Create(TheModule->getContext(), "forincr", TheFunction);
+    llvm::BasicBlock* AfterBB = llvm::BasicBlock::Create(TheModule->getContext(), "afterloop", TheFunction);
+    
+    // Save previous loop context - continue should go to increment, break to after
+    llvm::BasicBlock* PrevContinue = CurrentLoopContinue;
+    llvm::BasicBlock* PrevBreak = CurrentLoopBreak;
+    CurrentLoopContinue = IncrBB;  // Continue goes to increment block
+    CurrentLoopBreak = AfterBB;
+    
+    // Jump to condition block
+    Builder.CreateBr(CondBB);
+    
+    // Emit condition block
+    Builder.SetInsertPoint(CondBB);
+    llvm::Value* CurVar = Builder.CreateLoad(VarType, Alloca, VarName.c_str());
+    llvm::Value* CondV = Builder.CreateICmpSLT(CurVar, EndVal, "forcond");
+    Builder.CreateCondBr(CondV, LoopBB, AfterBB);
+    
+    // Emit loop body
+    Builder.SetInsertPoint(LoopBB);
+    for (auto& Expr : Body) {
+        Expr->codegen(Builder, TheModule, NamedValues);
+    }
+    
+    // Only create branch if the block doesn't already have a terminator
+    if (!Builder.GetInsertBlock()->getTerminator()) {
+        Builder.CreateBr(IncrBB);
+    }
+    
+    // Emit increment block
+    Builder.SetInsertPoint(IncrBB);
+    llvm::Value* CurVarForIncrement = Builder.CreateLoad(VarType, Alloca, VarName.c_str());
+    llvm::Value* StepVal = llvm::ConstantInt::get(VarType, 1);
+    llvm::Value* NextVar = Builder.CreateAdd(CurVarForIncrement, StepVal, "nextvar");
+    Builder.CreateStore(NextVar, Alloca);
+    Builder.CreateBr(CondBB);
+    
+    // Emit after block
+    Builder.SetInsertPoint(AfterBB);
+    
+    // Restore the old variable binding
+    if (OldVal)
+        NamedValues[VarName] = OldVal;
+    else
+        NamedValues.erase(VarName);
+    
+    // Restore previous loop context
+    CurrentLoopContinue = PrevContinue;
+    CurrentLoopBreak = PrevBreak;
+    
+    return llvm::ConstantInt::get(llvm::Type::getInt8Ty(TheModule->getContext()), 0);
+}
+
+llvm::Value* BreakExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
+    if (!CurrentLoopBreak) {
+        throw std::runtime_error("break statement not inside a loop");
+    }
+    
+    Builder.CreateBr(CurrentLoopBreak);
+    return llvm::ConstantInt::get(llvm::Type::getInt8Ty(TheModule->getContext()), 0);
+}
+
+llvm::Value* ContinueExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
+    if (!CurrentLoopContinue) {
+        throw std::runtime_error("continue statement not inside a loop");
+    }
+    
+    Builder.CreateBr(CurrentLoopContinue);
     return llvm::ConstantInt::get(llvm::Type::getInt8Ty(TheModule->getContext()), 0);
 }
 
