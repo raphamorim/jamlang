@@ -25,6 +25,7 @@ llvm_map_components_to_libnames(llvm_libs
   ExecutionEngine
   Interpreter
   MC
+  MCJIT
   Support
   nativecodegen
   OrcJIT
@@ -35,4 +36,43 @@ llvm_map_components_to_libnames(llvm_libs
 target_link_libraries(jam ${llvm_libs})
 
 # Installation rules
-install(TARGETS jam DESTINATION bin)
+include(GNUInstallDirs)
+
+# Set installation prefix if not specified
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+  set(CMAKE_INSTALL_PREFIX "/usr/local" CACHE PATH "Default install prefix" FORCE)
+endif()
+
+# Install the jam executable
+install(TARGETS jam 
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  COMPONENT Runtime
+)
+
+# Install documentation files
+install(FILES 
+  README.md
+  LICENSE
+  LANGUAGE_SPEC.md
+  DESTINATION ${CMAKE_INSTALL_DOCDIR}
+  COMPONENT Documentation
+)
+
+# Create a simple man page directory structure (optional)
+install(DIRECTORY DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
+
+# Print installation info
+message(STATUS "Jam will be installed to: ${CMAKE_INSTALL_PREFIX}")
+message(STATUS "Executable will be installed to: ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}")
+message(STATUS "Documentation will be installed to: ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DOCDIR}")
+
+# Add uninstall target
+if(NOT TARGET uninstall)
+  configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake_uninstall.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake"
+    IMMEDIATE @ONLY)
+
+  add_custom_target(uninstall
+    COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake)
+endif()

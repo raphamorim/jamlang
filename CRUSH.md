@@ -5,6 +5,18 @@
 - **Build with Make**: `make` (alternative build using Makefile)
 - **Clean build**: `rm -rf build && ./build.sh`
 
+## Installation Commands
+- **Quick install**: `./install.sh` (automated installation script)
+- **Install with CMake**: `make cmake-install` (recommended method)
+- **Install with Make**: `make install` (manual method)
+- **Uninstall**: `./uninstall.sh` or `make cmake-uninstall` or `make uninstall`
+- **Installation info**: `make info` (show installation paths and options)
+
+## Compiler Usage
+- **Compile to binary**: `jam <filename.jam>` (creates `output` executable)
+- **Run directly**: `jam --run <filename.jam>` (executes without creating binary)
+- **Show help**: `jam --help` (displays usage information)
+
 ## Test Commands
 - **Run all tests**: `./run_all_tests.sh` (comprehensive test suite)
 - **Run Jam tests only**: `./run_tests.sh` (unit tests for .jam files)

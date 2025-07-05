@@ -29,6 +29,10 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/ExecutionEngine/ExecutionEngine.h"
+#include "llvm/ExecutionEngine/GenericValue.h"
+#include "llvm/ExecutionEngine/MCJIT.h"
+#include "llvm/Support/CommandLine.h"
 
 // Token types
 enum TokenType {
@@ -1256,12 +1260,26 @@ llvm::Function* FunctionAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* T
 }
 
 int main(int argc, char* argv[]) {
-    if (argc != 2) {
-        std::cerr << "Usage: " << argv[0] << " <filename>" << std::endl;
+    // Parse command line arguments
+    bool runFlag = false;
+    std::string filename;
+    
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << " [--run] <filename>" << std::endl;
         return 1;
     }
-
-    std::string filename = argv[1];
+    
+    // Check for --run flag
+    int fileArgIndex = 1;
+    if (argc >= 3 && std::string(argv[1]) == "--run") {
+        runFlag = true;
+        fileArgIndex = 2;
+    } else if (argc == 2 && std::string(argv[1]) == "--run") {
+        std::cerr << "Usage: " << argv[0] << " [--run] <filename>" << std::endl;
+        return 1;
+    }
+    
+    filename = argv[fileArgIndex];
     std::ifstream file(filename);
 
     if (!file.is_open()) {
@@ -1301,53 +1319,91 @@ int main(int argc, char* argv[]) {
         function->codegen(Builder, TheModule.get(), NamedValues);
     }
 
-    // Print out the generated LLVM IR
-    std::string output;
-    llvm::raw_string_ostream out(output);
-    TheModule->print(out, nullptr);
-    std::cout << output;
+    if (runFlag) {
+        // Execute the code directly using LLVM JIT
+        std::cout << "Running Jam program..." << std::endl;
+        
+        // Create execution engine
+        std::string ErrStr;
+        llvm::ExecutionEngine* EE = llvm::EngineBuilder(std::move(TheModule))
+            .setErrorStr(&ErrStr)
+            .setEngineKind(llvm::EngineKind::JIT)
+            .create();
+        
+        if (!EE) {
+            std::cerr << "Failed to create execution engine: " << ErrStr << std::endl;
+            return 1;
+        }
+        
+        // Find the main function
+        llvm::Function* MainFn = EE->FindFunctionNamed("main");
+        if (!MainFn) {
+            std::cerr << "Error: No main function found" << std::endl;
+            delete EE;
+            return 1;
+        }
+        
+        // Execute the main function
+        std::vector<llvm::GenericValue> Args;
+        llvm::GenericValue Result = EE->runFunction(MainFn, Args);
+        
+        // Print the result if main returns a value
+        if (!MainFn->getReturnType()->isVoidTy()) {
+            std::cout << std::endl << "Program exited with code: " << Result.IntVal.getZExtValue() << std::endl;
+        } else {
+            std::cout << std::endl << "Program completed successfully." << std::endl;
+        }
+        
+        delete EE;
+        return 0;
+    } else {
+        // Print out the generated LLVM IR
+        std::string output;
+        llvm::raw_string_ostream out(output);
+        TheModule->print(out, nullptr);
+        std::cout << output;
 
-    // Now create the output binary
-    std::string TargetTriple = llvm::sys::getDefaultTargetTriple();
-    TheModule->setTargetTriple(TargetTriple);
+        // Now create the output binary
+        std::string TargetTriple = llvm::sys::getDefaultTargetTriple();
+        TheModule->setTargetTriple(TargetTriple);
 
-    std::string Error;
-    const llvm::Target* Target = llvm::TargetRegistry::lookupTarget(TargetTriple, Error);
+        std::string Error;
+        const llvm::Target* Target = llvm::TargetRegistry::lookupTarget(TargetTriple, Error);
 
-    if (!Target) {
-        std::cerr << "Failed to get target: " << Error << std::endl;
-        return 1;
+        if (!Target) {
+            std::cerr << "Failed to get target: " << Error << std::endl;
+            return 1;
+        }
+
+        llvm::TargetOptions opt;
+        auto RM = std::optional<llvm::Reloc::Model>();
+        auto TargetMachine = Target->createTargetMachine(TargetTriple, "generic", "", opt, RM);
+
+        TheModule->setDataLayout(TargetMachine->createDataLayout());
+
+        std::string ObjectFilename = "output.o";
+        std::error_code EC;
+        llvm::raw_fd_ostream dest(ObjectFilename, EC, llvm::sys::fs::OF_None);
+
+        if (EC) {
+            std::cerr << "Could not open file: " << EC.message() << std::endl;
+            return 1;
+        }
+
+        llvm::legacy::PassManager pass;
+        if (TargetMachine->addPassesToEmitFile(pass, dest, nullptr, llvm::CodeGenFileType::ObjectFile)) {
+            std::cerr << "TargetMachine can't emit a file of this type" << std::endl;
+            return 1;
+        }
+
+        pass.run(*TheModule);
+        dest.close();
+
+        // Finish up by creating an executable using system compiler
+        std::string cmd = "clang " + ObjectFilename + " -o output";
+        system(cmd.c_str());
+
+        std::cout << "Compilation completed successfully." << std::endl;
+        return 0;
     }
-
-    llvm::TargetOptions opt;
-    auto RM = std::optional<llvm::Reloc::Model>();
-    auto TargetMachine = Target->createTargetMachine(TargetTriple, "generic", "", opt, RM);
-
-    TheModule->setDataLayout(TargetMachine->createDataLayout());
-
-    std::string ObjectFilename = "output.o";
-    std::error_code EC;
-    llvm::raw_fd_ostream dest(ObjectFilename, EC, llvm::sys::fs::OF_None);
-
-    if (EC) {
-        std::cerr << "Could not open file: " << EC.message() << std::endl;
-        return 1;
-    }
-
-    llvm::legacy::PassManager pass;
-    if (TargetMachine->addPassesToEmitFile(pass, dest, nullptr, llvm::CodeGenFileType::ObjectFile)) {
-        std::cerr << "TargetMachine can't emit a file of this type" << std::endl;
-        return 1;
-    }
-
-    pass.run(*TheModule);
-    dest.close();
-
-    // Finish up by creating an executable using system compiler
-    std::string cmd = "clang " + ObjectFilename + " -o output";
-    system(cmd.c_str());
-
-    std::cout << "Compilation completed successfully." << std::endl;
-
-    return 0;
 }
