@@ -11,3 +11,8 @@ add_executable(jam_tests
     test_print_functions.cpp
     test_loops.cpp
 )
+
+# Add separate executable for jam files IR tests
+add_executable(jam_files_ir_tests 
+    test_jam_files_ir.cpp
+)

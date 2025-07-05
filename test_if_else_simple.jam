@@ -1,7 +1,0 @@
-fn test_if_else() -> u8 {
-    if (1 == 1) {
-        return 42;
-    } else {
-        return 0;
-    }
-}

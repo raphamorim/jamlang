@@ -1,6 +1,0 @@
-fn main() -> u32 {
-    const a: u16 = 100;
-    const b: u16 = 200;
-    const result: u16 = a + b;
-    return result;
-}
