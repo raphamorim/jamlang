@@ -178,6 +178,8 @@ private:
             addToken(TOK_TRUE, text);
         } else if (text == "false") {
             addToken(TOK_FALSE, text);
+        } else if (text == "print" || text == "println" || text == "printf") {
+            addToken(TOK_IDENTIFIER, text); // Treat as regular identifiers for now
         } else if (text == "u8" || text == "u16" || text == "u32" || text == "i8" || text == "i16" || text == "i32" || text == "bool" || text == "str") {
             addToken(TOK_TYPE, text);
         } else {
@@ -355,6 +357,9 @@ public:
     CallExprAST(std::string Callee, std::vector<std::unique_ptr<ExprAST>> Args)
         : Callee(std::move(Callee)), Args(std::move(Args)) {}
     llvm::Value* codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) override;
+    
+private:
+    llvm::Value* generatePrintCall(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues);
 };
 
 class ReturnExprAST : public ExprAST {
@@ -540,6 +545,20 @@ private:
             }
             
             return std::make_unique<IfExprAST>(std::move(condition), std::move(thenBody), std::move(elseBody));
+        } else if (check(TOK_IDENTIFIER)) {
+            // Look ahead to see if this is a function call statement
+            int saved_current = current;
+            advance(); // consume identifier
+            if (check(TOK_OPEN_PAREN)) {
+                // This is a function call, reset and parse it
+                current = saved_current;
+                auto expr = parseComparison();
+                consume(TOK_SEMI, "Expected ';' after function call");
+                return expr;
+            } else {
+                // Not a function call, reset and continue with normal parsing
+                current = saved_current;
+            }
         }
 
         return parseComparison();
@@ -689,8 +708,8 @@ llvm::Value* BooleanExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* T
 }
 
 llvm::Value* StringLiteralExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
-    // Create a global string constant
-    llvm::Constant* StrConstant = llvm::ConstantDataArray::getString(TheModule->getContext(), Val, false);
+    // Create a global string constant (null-terminated for C compatibility)
+    llvm::Constant* StrConstant = llvm::ConstantDataArray::getString(TheModule->getContext(), Val, true);
     llvm::GlobalVariable* StrGlobal = new llvm::GlobalVariable(
         *TheModule,
         StrConstant->getType(),
@@ -753,6 +772,11 @@ llvm::Value* BinaryExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* Th
 }
 
 llvm::Value* CallExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
+    // Handle built-in print functions
+    if (Callee == "print" || Callee == "println" || Callee == "printf") {
+        return generatePrintCall(Builder, TheModule, NamedValues);
+    }
+    
     llvm::Function* CalleeF = TheModule->getFunction(Callee);
     if (!CalleeF)
         throw std::runtime_error("Unknown function referenced: " + Callee);
@@ -768,6 +792,85 @@ llvm::Value* CallExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheM
     }
 
     return Builder.CreateCall(CalleeF, ArgsV, "calltmp");
+}
+
+llvm::Value* CallExprAST::generatePrintCall(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
+    // Declare printf function if not already declared
+    llvm::Function* printfFunc = TheModule->getFunction("printf");
+    if (!printfFunc) {
+        llvm::FunctionType* printfType = llvm::FunctionType::get(
+            llvm::Type::getInt32Ty(TheModule->getContext()),
+            llvm::PointerType::get(llvm::Type::getInt8Ty(TheModule->getContext()), 0),
+            true // varargs
+        );
+        printfFunc = llvm::Function::Create(
+            printfType,
+            llvm::Function::ExternalLinkage,
+            "printf",
+            TheModule
+        );
+    }
+    
+    // Declare puts function for simple println
+    llvm::Function* putsFunc = TheModule->getFunction("puts");
+    if (!putsFunc) {
+        llvm::FunctionType* putsType = llvm::FunctionType::get(
+            llvm::Type::getInt32Ty(TheModule->getContext()),
+            llvm::PointerType::get(llvm::Type::getInt8Ty(TheModule->getContext()), 0),
+            false // not varargs
+        );
+        putsFunc = llvm::Function::Create(
+            putsType,
+            llvm::Function::ExternalLinkage,
+            "puts",
+            TheModule
+        );
+    }
+    
+    llvm::Value* result = nullptr;
+    
+    if (Callee == "println" && Args.size() == 1) {
+        // Simple println with one string argument - use puts
+        llvm::Value* arg = Args[0]->codegen(Builder, TheModule, NamedValues);
+        if (!arg) return nullptr;
+        
+        // If it's a string slice, extract the pointer
+        if (arg->getType()->isStructTy()) {
+            arg = Builder.CreateExtractValue(arg, 0, "str_ptr");
+        }
+        
+        result = Builder.CreateCall(putsFunc, {arg}, "puts_call");
+    } else if (Callee == "print" && Args.size() == 1) {
+        // Simple print with one string argument - use printf without newline
+        llvm::Value* arg = Args[0]->codegen(Builder, TheModule, NamedValues);
+        if (!arg) return nullptr;
+        
+        // If it's a string slice, extract the pointer
+        if (arg->getType()->isStructTy()) {
+            arg = Builder.CreateExtractValue(arg, 0, "str_ptr");
+        }
+        
+        // For print, we just print the string directly without format string
+        // Create format string "%s" for printf
+        llvm::Constant* formatStr = llvm::ConstantDataArray::getString(TheModule->getContext(), "%s", true);
+        llvm::GlobalVariable* formatGlobal = new llvm::GlobalVariable(
+            *TheModule,
+            formatStr->getType(),
+            true,
+            llvm::GlobalValue::PrivateLinkage,
+            formatStr,
+            "print_fmt"
+        );
+        llvm::Value* formatPtr = Builder.CreateBitCast(formatGlobal, llvm::PointerType::get(llvm::Type::getInt8Ty(TheModule->getContext()), 0));
+        
+        result = Builder.CreateCall(printfFunc, {formatPtr, arg}, "printf_call");
+    } else {
+        // For now, just handle simple cases
+        throw std::runtime_error("Complex print formatting not yet implemented");
+    }
+    
+    // Return the result (printf/puts return int)
+    return result;
 }
 
 llvm::Value* ReturnExprAST::codegen(llvm::IRBuilder<>& Builder, llvm::Module* TheModule, std::map<std::string, llvm::Value*>& NamedValues) {
