@@ -26,35 +26,35 @@ public:
     }
     
     void runAll() {
-        std::cout << "🧪 Running C++ Unit Tests for Jam Compiler\n";
-        std::cout << "==========================================\n\n";
+        std::cout << "Running C++ Unit Tests for Jam Compiler\n";
+        std::cout << "=======================================\n\n";
         
         for (auto& test : tests) {
-            std::cout << "🔍 " << test.name << "... ";
+            std::cout << test.name << "... ";
             try {
                 test.test();
                 test.passed = true;
-                std::cout << "✅ PASS\n";
+                std::cout << "PASS\n";
                 passed++;
             } catch (const std::exception& e) {
                 test.passed = false;
                 test.error = e.what();
-                std::cout << "❌ FAIL\n";
+                std::cout << "FAIL\n";
                 std::cout << "   Error: " << e.what() << "\n";
                 failed++;
             }
         }
         
-        std::cout << "\n📊 Test Results\n";
-        std::cout << "===============\n";
-        std::cout << "✅ Passed: " << passed << "\n";
-        std::cout << "❌ Failed: " << failed << "\n";
-        std::cout << "📈 Total:  " << (passed + failed) << "\n";
+        std::cout << "\nTest Results\n";
+        std::cout << "============\n";
+        std::cout << "Passed: " << passed << "\n";
+        std::cout << "Failed: " << failed << "\n";
+        std::cout << "Total:  " << (passed + failed) << "\n";
         
         if (failed == 0) {
-            std::cout << "\n🎉 All C++ tests passed!\n";
+            std::cout << "\nAll C++ tests passed!\n";
         } else {
-            std::cout << "\n💥 Some C++ tests failed.\n";
+            std::cout << "\nSome C++ tests failed.\n";
         }
     }
     

@@ -21,6 +21,6 @@ if [ $? -eq 0 ]; then
     echo "======================="
     ./jam_tests
 else
-    echo "❌ Build failed!"
+    echo "Build failed!"
     exit 1
 fi

@@ -1,4 +1,4 @@
-.PHONY: build install uninstall clean cmake-build cmake-install cmake-uninstall
+.PHONY: build install uninstall clean cmake-build cmake-install cmake-uninstall test
 .DEFAULT_GOAL := build
 
 LLVM_CONFIG=$(shell which llvm-config 2>/dev/null || echo "llvm-config")
@@ -104,9 +104,15 @@ info:
 	@echo ""
 	@echo "Available targets:"
 	@echo "  make build          - Build the compiler"
+	@echo "  make test           - Run all tests (Jam + C++)"
 	@echo "  make install        - Install using manual method"
 	@echo "  make uninstall      - Uninstall manual installation"
 	@echo "  make cmake-install  - Install using CMake (recommended)"
 	@echo "  make cmake-uninstall- Uninstall CMake installation"
 	@echo "  make clean          - Clean build artifacts"
 	@echo "  make info           - Show this information"
+
+# Run all tests
+test:
+	@echo "Running comprehensive test suite..."
+	./run_all_tests.sh

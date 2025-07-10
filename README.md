@@ -1,80 +1,58 @@
 # Jam Programming Language
 
-Jam is a general-purpose programming language. Jam strives to give developers the same level of freedom and control as C, while introducing modern safety features to reduce common programming pitfalls. Jam is designed for those who want to write bare-metal, high-performance software without being constrained by heavy abstractions — but also without being left unguarded against memory bugs, undefined behavior, and other issues.
+Jam is a systems programming language designed to provide developers with the control and performance characteristics of C while incorporating modern safety features to mitigate common programming errors. The language targets developers who require bare-metal performance and direct hardware access without sacrificing code reliability and maintainability.
 
-## Features
+## Abstract
 
-- **Go-like syntax**: Clean, readable syntax with familiar control flow
-- **Multiple integer types**: u8, u16, u32, i8, i16, i32 with explicit sizing
-- **String literals and slices**: UTF-8 string support with `str` type
-- **Boolean type**: Native `bool` type with `true`/`false` values
-- **Control flow**: if/else statements, for loops, while loops with break/continue
-- **Functions**: First-class functions with explicit parameter and return types
-- **JIT execution**: Run code directly with `--run` flag for rapid development
+This implementation presents a compiler for the Jam programming language, featuring LLVM-based code generation, just-in-time execution capabilities, and a comprehensive type system. The compiler supports multiple integer types with explicit bit-width specifications, UTF-8 string handling, and modern control flow constructs while maintaining compatibility with low-level system programming requirements.
 
-## Installation
+## Language Features
 
-### Quick Install (Recommended)
+### Type System
+- **Integer Types**: Explicit bit-width integers (u8, u16, u32, i8, i16, i32) with well-defined overflow behavior
+- **String Type**: UTF-8 compliant string literals with slice-based representation
+- **Boolean Type**: Native boolean type with explicit true/false semantics
+- **Type Safety**: Compile-time type checking with explicit type annotations
 
+### Control Flow
+- **Conditional Statements**: if/else constructs with boolean expression evaluation
+- **Iteration Constructs**: for loops with range syntax and while loops
+- **Control Transfer**: break and continue statements for loop control
+- **Function Definitions**: First-class functions with explicit parameter and return type specifications
+
+### Execution Model
+- **Ahead-of-Time Compilation**: Traditional compilation to native machine code
+- **Just-in-Time Execution**: Direct execution via LLVM JIT for development workflows
+
+## Installation and Build Requirements
+
+### Prerequisites
+- **LLVM Framework**: Version 20 or higher for code generation and optimization
+- **CMake**: Version 3.10 or higher for build system management
+- **Clang Compiler**: C++20 compliant compiler for host compilation
+
+### Installation Procedures
+
+#### Automated Installation
 ```bash
-# Clone the repository
 git clone <repository-url>
 cd jamlang
-
-# Run the installation script
 ./install.sh
 ```
 
-### Manual Installation Options
-
-#### Option 1: Using CMake (Recommended)
+#### Manual Build Process
 ```bash
-# Build and install system-wide
+# CMake-based build (recommended)
 make cmake-install
 
-# Or build first, then install
-./build.sh
-cd build && sudo make install
-```
-
-#### Option 2: Using Make
-```bash
-# Build and install manually
+# Alternative make-based build
 make install
 
-# Or just build locally
-make build
-```
-
-#### Option 3: Local Build Only
-```bash
-# Build without installing
+# Local development build
 ./build.sh
-
-# Use the local executable
-./build/jam your-program.jam
 ```
 
-### Uninstallation
-
-```bash
-# If installed via install.sh or cmake
-./uninstall.sh
-
-# If installed via make
-make uninstall
-
-# If installed via CMake
-make cmake-uninstall
-```
-
-## Build Requirements
-
-- **LLVM >= 20**: For code generation and JIT execution
-- **CMake >= 3.10**: For build system
-- **Clang**: C++ compiler with C++20 support
-
-### Installing Dependencies
+### Platform-Specific Dependencies
 
 #### macOS
 ```bash
@@ -91,63 +69,44 @@ sudo apt-get install llvm-dev cmake clang
 sudo yum install llvm-devel cmake clang
 ```
 
-#### Arch Linux
+## Usage and Command-Line Interface
+
+### Basic Operations
 ```bash
-sudo pacman -S llvm cmake clang
-```
-
-## Usage
-
-Once installed, you can use the `jam` compiler from anywhere:
-
-```bash
-# Show help
+# Display compiler options
 jam --help
 
-# Compile to binary
+# Compile source to executable
 jam program.jam
-./output
 
-# Run directly (JIT execution)
+# Execute via JIT compilation
 jam --run program.jam
-
-# Example programs
-jam --run tui.jam                    # Run the TUI demo
-jam tests/unit/test_u8.jam          # Compile a test file
 ```
 
-## Quick Start
+### Example Programs
 
-Create a simple "Hello, World!" program:
-
+#### Basic Program Structure
 ```jam
-// hello.jam
 fn main() -> u32 {
     println("Hello, World!");
     return 0;
 }
 ```
 
-Run it:
-```bash
-jam --run hello.jam
-```
-
-## Language Examples
-
-### Basic Types and Variables
+#### Type System Demonstration
 ```jam
-fn main() -> u32 {
-    const name: str = "Jam";
-    const version: u8 = 1;
-    var is_awesome: bool = true;
+fn demonstrate_types() -> u32 {
+    const byte_value: u8 = 255;
+    const word_value: u16 = 65535;
+    const dword_value: u32 = 4294967295;
+    const flag: bool = true;
+    const message: str = "Type system demonstration";
     
-    println("Welcome to Jam!");
     return 0;
 }
 ```
 
-### Control Flow
+#### Control Flow Examples
 ```jam
 fn fibonacci(n: u32) -> u32 {
     if (n <= 1) {
@@ -157,18 +116,7 @@ fn fibonacci(n: u32) -> u32 {
     }
 }
 
-fn main() -> u32 {
-    for i in 0:10 {
-        const result: u32 = fibonacci(i);
-        println("fib result");
-    }
-    return 0;
-}
-```
-
-### Loops and Break/Continue
-```jam
-fn main() -> u32 {
+fn iterative_example() -> u32 {
     for i in 0:10 {
         if (i == 5) {
             continue;
@@ -176,51 +124,67 @@ fn main() -> u32 {
         if (i == 8) {
             break;
         }
-        println("Iteration");
+        const result: u32 = fibonacci(i);
     }
     return 0;
 }
 ```
 
-## Development
+## Testing and Validation
 
-### Building from Source
+### Test Suite Execution
 ```bash
-# Clone and build
-git clone <repository-url>
-cd jamlang
-./build.sh
+# Run comprehensive test suite
+make test
 
-# Run tests
-./run_all_tests.sh
-
-# Install for development
-make cmake-install
+# Execute individual test categories
+./run_tests.sh           # Language-level tests
+./tests/cpp/build_and_run.sh  # Compiler unit tests
 ```
 
-### Project Structure
+### Test Coverage
+The test suite validates:
+- Lexical analysis of type annotations and literals
+- Syntactic parsing of language constructs
+- Semantic analysis and type checking
+- LLVM IR generation correctness
+- End-to-end compilation pipeline integrity
+
+## Architecture and Implementation
+
+### Compiler Pipeline
+1. **Lexical Analysis**: Tokenization of source code with type-aware scanning
+2. **Syntactic Analysis**: Recursive descent parsing with error recovery
+3. **Semantic Analysis**: Type checking and symbol resolution
+4. **Code Generation**: LLVM IR emission with optimization passes
+5. **Linking**: Native code generation and executable production
+
+### Project Organization
 ```
 jamlang/
-├── src/main.cpp           # Compiler source code
-├── tests/                 # Test suite
-│   ├── unit/             # Jam language tests
-│   └── cpp/              # C++ unit tests
-├── build.sh              # Build script
-├── install.sh            # Installation script
-├── uninstall.sh          # Uninstallation script
-├── Makefile              # Make targets
-├── CMakeLists.txt        # CMake configuration
-└── README.md             # This file
+├── src/main.cpp           # Compiler implementation
+├── tests/                 # Validation suite
+│   ├── unit/             # Language feature tests
+│   └── cpp/              # Compiler unit tests
+├── build.sh              # Build automation
+├── CMakeLists.txt        # Build configuration
+└── documentation/        # Language specification
 ```
 
-## Contributing
+## Research and Development
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run the test suite: `./run_all_tests.sh`
-5. Submit a pull request
+### Contributing Guidelines
+1. Fork the repository and create a feature branch
+2. Implement changes following existing code conventions
+3. Validate modifications using the test suite: `make test`
+4. Submit pull request with detailed change description
 
-## License
+### Future Research Directions
+- Memory management strategies for systems programming
+- Optimization techniques for embedded target architectures
+- Integration with existing C/C++ codebases
+- Performance analysis and benchmarking frameworks
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+## License and Distribution
+
+This software is distributed under the MIT License. See the LICENSE file for complete terms and conditions.
